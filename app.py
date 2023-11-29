@@ -5,9 +5,11 @@ import pathlib
 import queue
 import tempfile
 import threading
+from typing import Optional
 
 import accelerate
 import fire
+import noisereduce as nr
 import numpy as np
 import speech_recognition as sr
 import torch
@@ -27,15 +29,16 @@ accelerator = accelerate.Accelerator()
 def main(
     model_name="base",
     energy: int = 300,
-    pause: float = 0.2,
-    dynamic_energy: bool = False,
+    pause: float = 0.8,
+    dynamic_energy: bool = True,
     dynamic_energy_adjustment_damping: float = 0.15,
     dynamic_energy_ratio: float = 1.5,
     operation_timeout: float = 1.0,
     phrase_threshold: float = 0.5,
-    non_speaking_duration: float = 0.1,
+    non_speaking_duration: float = 0.5,
     save_file=False,
     store_transcription_to="recordings/",
+    noise_cancelation: bool = True,
     input_device_idx=None,
 ):
     """
@@ -46,9 +49,15 @@ def main(
     energy (int): Energy level for mic sensitivity.
     pause (float): Pause duration to consider the end of a phrase.
     dynamic_energy (bool): Flag to enable dynamic energy adjustment.
-    save_file (bool): Flag to save the recorded audio files.
-    store_transcription_to (str): Path to store transcriptions.
-    input_device_idx (int): Index of the input device (microphone).
+    dynamic_energy_adjustment_damping (float): Damping factor for dynamic energy adjustment.
+    dynamic_energy_ratio (float): Ratio of dynamic energy adjustment.
+    operation_timeout (float): Timeout for the operation.
+    phrase_threshold (float): Minimum seconds of speaking audio before we consider the speaking audio a phrase.
+    non_speaking_duration (float): Seconds of non-speaking audio to keep on both sides of the recording.
+    save_file (bool): Flag to save the audio file.
+    store_transcription_to (str): Path to store the transcription.
+    noise_cancelation (bool): Flag to enable noise cancelation.
+    input_device_idx (int): Index of the input device to use.
     """
     # Choose the input device if not specified
     if input_device_idx is None:
@@ -85,6 +94,7 @@ def main(
         operation_timeout=operation_timeout,
         phrase_threshold=phrase_threshold,
         non_speaking_duration=non_speaking_duration,
+        noise_cancellation=noise_cancelation,
     )
 
     # Process and store transcription results
@@ -169,8 +179,9 @@ def start_threads(
     dynamic_energy_adjustment_damping: float = 0.15,
     dynamic_energy_ratio: float = 1.5,
     operation_timeout: float = 1.0,
-    phrase_threshold: float = 0.5,
+    phrase_threshold: float = 0.3,
     non_speaking_duration: float = 0.5,
+    noise_cancellation: bool = True,
 ):
     """
     Start threads for audio recording and transcription.
@@ -203,6 +214,7 @@ def start_threads(
             phrase_threshold=phrase_threshold,
             non_speaking_duration=non_speaking_duration,
             save_file=save_file,
+            noise_cancellation=noise_cancellation,
         ),
         daemon=True,
     ).start()
@@ -258,14 +270,15 @@ def record_audio(
     temp_dir: str,
     input_device_idx: int,
     energy: int = 300,
-    pause: float = 0.8,
+    pause: float = 0.3,
     dynamic_energy: bool = False,
     dynamic_energy_adjustment_damping: float = 0.15,
     dynamic_energy_ratio: float = 1.5,
-    operation_timeout: float = 1.0,
-    phrase_threshold: float = 0.5,
-    non_speaking_duration: float = 0.5,
+    operation_timeout: Optional[float] = None,
+    phrase_threshold: float = 0.2,
+    non_speaking_duration: float = 0.2,
     save_file: bool = False,
+    noise_cancellation: bool = True,
 ) -> None:
     """
     Record audio continuously and put it in a queue for transcription.
@@ -307,15 +320,19 @@ def record_audio(
                 audio_clip = AudioSegment.from_file(data)
                 filename = os.path.join(temp_dir, f"temp{i}.wav")
                 audio_clip.export(filename, format="wav")
-                audio_data = filename
-            else:
-                audio_data = (
-                    np.frombuffer(audio.get_raw_data(), np.int16)
-                    .flatten()
-                    .astype(np.float32)
-                    / 32768.0
-                )
-                audio_data = torch.from_numpy(audio_data)
+
+            audio_data = (
+                np.frombuffer(audio.get_raw_data(), np.int16)
+                .flatten()
+                .astype(np.float32)
+                / 32768.0
+            )
+
+            if noise_cancellation:
+                # Assuming audio_data is a NumPy array with raw audio data
+                audio_data = reduce_noise(audio_data)
+
+            audio_data = torch.from_numpy(audio_data)
 
             audio_queue.put_nowait(audio_data)
             i += 1
@@ -348,6 +365,28 @@ def transcribe_forever(
 
         if save_file and isinstance(audio_data, str):
             os.remove(audio_data)
+
+
+def reduce_noise(
+    audio_data: np.ndarray, sample_rate: int = 16000
+) -> np.ndarray:
+    """
+    Reduce noise from the given audio data using the noisereduce library.
+
+    Args:
+    audio_data (numpy.ndarray): The raw audio data as a NumPy array.
+    sample_rate (int): The sample rate of the audio data.
+
+    Returns:
+    numpy.ndarray: The noise-reduced audio data.
+    """
+    # Convert the numpy array to float64 for noisereduce library compatibility
+    audio_data = audio_data.astype(np.float64)
+
+    # Perform noise reduction
+    reduced_noise_audio = nr.reduce_noise(y=audio_data, sr=sample_rate)
+
+    return reduced_noise_audio
 
 
 if __name__ == "__main__":
