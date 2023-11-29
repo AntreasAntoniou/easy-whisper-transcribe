@@ -4,6 +4,7 @@ torchaudio
 accelerate
 numpy
 tqdm
+fire
 transformers
 ffmpeg-python
 pyaudio
