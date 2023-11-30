@@ -47,8 +47,8 @@ The Easy Whisper Transcription tool is built upon a robust and efficient softwar
 ### Steps
 1. **Clone the Repository**
    ```bash
-   git clone https://github.com/yourusername/easy-whisper-transcription.git
-   cd easy-whisper-transcription
+   git clone https://github.com/yourusername/easy-whisper-transcribe.git
+   cd easy-whisper-transcribe
 2. **Setup a virtual env**
    ```bash
    python -m venv venv
