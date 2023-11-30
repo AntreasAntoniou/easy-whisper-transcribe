@@ -7,6 +7,7 @@ tqdm
 fire
 transformers
 ffmpeg-python
+noisereduce
 pyaudio
 rich
 orjson
